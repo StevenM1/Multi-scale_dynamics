@@ -1,0 +1,879 @@
+## ALL FUNCTIONS OVERWRITTEN BY SM
+
+makeDCT <- function(frame_times, high_pass=1/128) {
+  n_frames = length(frame_times)
+  n_times <- 1:n_frames
+
+  dt = (frame_times[length(frame_times)]-frame_times[1]) / (n_frames-1)  # should be 1 with trials
+  order = pmin(n_frames-1, floor(2*n_frames*high_pass*dt))
+  cosine_drift = matrix(0, nrow=n_frames, ncol=order+1)
+  normalizer = sqrt(2/n_frames)
+
+  for(k in seq(1, order+1)) {
+    cosine_drift[,k] = normalizer*cos((pi/n_frames)*(n_times+0.5)*k)
+  }
+  cosine_drift = cosine_drift/max(cosine_drift)#/100    # THIS IS NEW -- instead of priors on 0.01
+  return(cosine_drift)
+}
+
+augment = function(s,da,design)
+  # Adds attributes to augmented data
+  # learn: empty array for Q values with dim = choice alternative (low,high) x
+  #   stimulus x trials (max across stimuli)
+  # index: look up (row number) for stimuli in da, a matrix dim  = max trials x
+  #   stimulus matrix (rows for each choice alternative contiguous)
+{
+  getIndex <- function(typei,cname,da,maxn) {
+    out <- which(da[,cname]==typei)
+    c(out,rep(NA,maxn-length(out)))
+  }
+
+  getIndexThis <- function(da, outcomes) {
+    ## gets index of Q-value corresponding to the accumulator
+    # NB: outcomes is sorted by trial order, da is *not*
+    # so we need to return an index that takes this into account
+    #da$lS <- da[cbind(1:nrow(da), match(as.character(da$lR), colnames(da)))]
+    da$colNumbers <- match(as.character(da$lS), colnames(outcomes))
+
+    return(cbind(da$trials, da$colNumbers))
+  }
+
+  getIndexOther <- function(da, outcomes) {
+    ## ONLY WORKS FOR 2AFC!!
+    ## gets index of Q-value corresponding to the *OTHER* accumulator (in an advantage framework)
+    lROptions <- unique(as.character(da$lR))
+    da$lRother <- ifelse(da$lR==lROptions[1], lROptions[2], lROptions[1])
+    da$lSOther <- da[cbind(1:nrow(da), match(paste0('s_', as.character(da$lRother)), colnames(da)))]
+    da$colNumbers <- match(as.character(da$lSOther), colnames(outcomes))
+    return(cbind(da$trials, da$colNumbers))
+    # return(cbind(da$trials, match(da[cbind(da$trials, match(da$lRother, colnames(da)))], colnames(outcomes))))
+  }
+
+  makepArray <- function(x) {
+    stim <- design$adapt$stimulus$targets
+    x <- x[x$R==x$lR,]          # NB: this ONLY allows the winning accumulator/stimulus to receive feedback!!
+    x <- x[order(x$trials),]    # *must* be ordered by trial n for this matrix
+
+    pArray <- matrix(NA, nrow=max(x$trials), ncol=length(stim))
+    colnames(pArray) <- stim
+    for(i in 1:nrow(x)) {
+      trial <- x[i,'trials']
+      pArray[trial,as.character(x[i,'s_left'])] <- x[i,'p_left']
+      pArray[trial,as.character(x[i,'s_right'])] <- x[i,'p_right']
+    }
+    return(pArray)
+  }
+
+  makeOutcomes <- function(x) {
+    stim <- design$adapt$stimulus$targets
+    x <- x[x$R==x$lR,]          # NB: this ONLY allows the winning accumulator/stimulus to receive feedback!!
+    # x <- x[x$winner,]
+    x <- x[order(x$trials),]    # *must* be ordered by trial n for this matrix
+
+    outcomes <- data.frame(matrix(NA, nrow=max(x$trials), ncol=length(stim)))
+    colnames(outcomes) <- stim
+    for(trial in unique(x$trials)) {
+      outcomes[trial,as.character(x[trial,'lS'])] <- x[trial,'reward']
+    }
+    return(outcomes)
+  }
+
+  if (!is.null(design$adapt$stimulus)) {
+    targets <- design$adapt$stimulus$targets
+    par <- design$adapt$stimulus$output_name
+    #    maxn <- max(sapply(dimnames(targets)[[1]], function(x){table(da[da$subjects==s,x])}))
+
+    # da index x stimulus
+    # out <- sapply(targets[1,],getIndex,cname=dimnames(targets)[[1]][1],
+    #               da=da[da$subjects==s,],maxn=maxn)
+    stimulus <- list() #index=out)
+    # accumulator x stimulus x trials
+    ## SM: why not stimulus x trials, and match to accumulators at a later point (via getIndex)? would make using c much easier
+    # stimulus$learn <- array(NA,dim=c(dim(targets),maxn/dim(targets)[1]),
+    #                          dimnames=list(rownames(targets),targets[1,],NULL))
+    stimulus$targets <- targets
+    stimulus$par <- par
+
+    if('trials' %in% colnames(da)) {
+      outcomes <- makeOutcomes(da[da$subjects==s,])
+      pArray <- makepArray(da[da$subjects==s,])
+      return(list(stimulus=stimulus, outcomes=outcomes, pArray=pArray,
+                  index=getIndexThis(da[da$subjects==s,], outcomes),
+                  indexOther=getIndexOther(da[da$subjects==s,], outcomes)))
+    }
+  } else if(!is.null(design$adapt$dynamic)) { # add other types here
+    # outcomes becomes a matrix of nTrials x [accuracy, choice]
+    # no pArray
+    columns_to_include <- design$adapt$dynamic$columns_to_include
+    if('trials' %in% colnames(da)) {
+
+      tmp <- da[da$subjects==s,]
+      tmp <- tmp[order(tmp$trials),]
+
+      # unique trials only!
+      tmp <- tmp[tmp$lM==TRUE,]
+
+      outcomes <- tmp[, columns_to_include]
+      if(length(columns_to_include) == 1) outcomes <- matrix(outcomes, ncol=1)
+      index <- match(da[da$subjects==s,'trials'], tmp$trials)
+
+      if(is.null(design$adapt$includeDCT)) {
+        return(list(outcomes=outcomes, index=index))
+      } else {
+        dct <- makeDCT(high_pass=1/50, frame_times=1:nrow(tmp))
+        polyX <- poly(1:nrow(tmp), order=10)
+        polyX <- apply(polyX, 2, function(x) x/max(x)) # normalize to max 1 for each column
+        return(list(outcomes=outcomes, index=index, dct=dct, poly=polyX))
+      }
+    }
+  } else {
+    return(list(stimulus=stimulus))
+  }
+}
+
+## very funny Niek
+# adapt.c.emc <- function(...){
+#   return(NA)
+# }
+
+# ARCHITECTURE OF FOLLOWING FUNCTION WILL NEED UPDATING FOR MULTIPLE ADAPT TYPES
+# s="10";npars=pars;da=data; rfun=model$rfun;return_learning=FALSE;mapped_p=FALSE
+update_pars = function(s,npars,da,rfun=NULL,return_learning=FALSE,mapped_p=FALSE,
+                       return_all=FALSE)
+  # for subject s
+  # Either return da filling in responses and RT if da has no responses (in
+  # in which case rfun must be supplied), or return npars filling in adapted
+  # parameters or if return_learning returns learning (e.g., Q values)
+{
+  adapt <- attr(da,"adapt")$design
+
+  if(adapt$useC & !mapped_p & !return_all & !any(is.na(da$R))) {
+    outcomes <- attr(da, 'adapt')[[s]]$outcomes
+    index <- attr(da, 'adapt')[[s]]$index
+    npars <- npars[da$subjects==s,]
+    da <- da[da$subjects==s,]
+
+    # update
+    if(!is.null(adapt$stimulus)) { # & !any(is.na(da$R))) {
+      if(adapt$stimulus$adapt_fun_name=='delta') {
+        learningRates <- matrix(npars[1,'alpha'], nrow=nrow(outcomes), ncol=ncol(outcomes))  # TODO make this more flexible
+        startValues <- rep(npars[1,'q0'], ncol(outcomes))  # TODO make this more flexible
+        updated <- adapt.c.emc(feedback=as.matrix(outcomes),
+                               arguments=list(startValues = startValues,
+                                              learningRates = learningRates),
+                               learningRule='delta')
+        # updated <- adapt.c.dmc(startValues = startValues,
+        #                        learningRates = learningRates,
+        #                        feedback = as.matrix(outcomes),
+        #                        learningRule='SARSA')
+        colnames(updated$adaptedValues) <- colnames(outcomes)
+        allQs <- updated$adaptedValues
+      } else if(adapt$stimulus$adapt_fun_name=='vkf') {
+        volatilityLearningRates <- matrix(npars[1,'alpha'], nrow=nrow(outcomes), ncol=ncol(outcomes))  # TODO make this more flexible
+        predictionsStartValues <- rep(npars[1,'q0'], ncol(outcomes))  # TODO make this more flexible
+        volatilitiesStartValues <- rep(npars[1,'volatility0'], ncol(outcomes))  # TODO make this more flexible
+        uncertaintiesStartValues <- rep(npars[1,'w0'], ncol(outcomes))
+        updated <- adapt.c.emc(feedback=as.matrix(outcomes),
+                               arguments=list(volatilityLearningRates = volatilityLearningRates,
+                                              predictionsStartValues = predictionsStartValues,
+                                              volatilitiesStartValues = volatilitiesStartValues,
+                                              uncertaintiesStartValues = uncertaintiesStartValues),
+                               learningRule='vkf')
+        allQs <- updated$adaptedPredictions
+      } else if(adapt$stimulus$adapt_fun_name=='vkfbinary') {
+        volatilityLearningRates <- matrix(npars[1,'alpha'], nrow=nrow(outcomes), ncol=ncol(outcomes))  # TODO make this more flexible
+        predictionsStartValues <- rep(npars[1,'q0'], ncol(outcomes))  # TODO make this more flexible
+        volatilitiesStartValues <- rep(npars[1,'volatility0'], ncol(outcomes))  # TODO make this more flexible
+        uncertaintiesStartValues <- rep(npars[1,'w0'], ncol(outcomes))
+        updated <- adapt.c.emc(feedback=as.matrix(outcomes),
+                               arguments=list(volatilityLearningRates = volatilityLearningRates,
+                                              predictionsStartValues = predictionsStartValues,
+                                              volatilitiesStartValues = volatilitiesStartValues,
+                                              uncertaintiesStartValues = uncertaintiesStartValues),
+                               learningRule='vkf')
+        allQs <- updated$adaptedPredictions
+      }
+      if(return_learning) {
+        return(updated)
+      }
+
+      Q <- allQs[index]
+
+      # Advantage framework (2AFC ONLY!!)
+      if(('ws' %in% adapt$stimulus$output_par_names) & ('wd' %in% adapt$stimulus$output_par_names)) {
+        indexOther <- attr(da, 'adapt')[[s]]$indexOther
+        Q <- cbind(Q, allQs[indexOther])
+      }
+
+      ## function
+      npars[,adapt$stimulus$output_name] <- adapt$stimulus$output_fun(npars[,adapt$stimulus$output_par_names], Q)
+      ## hacky way of preventing errors due to extreme values
+      npars[,'v'] <- pmin(npars[,'v'], 1e3)
+      npars[,'v'] <- pmax(npars[,'v'], 0)
+
+      ## add prediction errors and other latent learning variables!
+      attr(npars, 'learn') <- updated
+      return(npars)
+
+    } else if(!is.null(adapt$dynamic)) {
+
+      ###### DYNAMIC
+      if(adapt$dynamic$adapt_fun_name=='delta') {
+        # Delta rule --------------------------------------------------------------
+        da$lM <- as.logical(da$lM)
+        learningRates <- as.matrix(cbind(npars[da$lM,'alpha1'], npars[da$lM,'alpha2'], npars[da$lM,'alpha3'])) # TODO make this more flexible
+        startValues <- npars[1, c('q01', 'q02', 'q03')]
+
+        # if any of learning rates <= pnorm(-4) or >= pnorm(4), do not accept -- return parameters that are impossible so we get NAs
+        alpha1 <- npars[1,c('alpha1', 'alpha2', 'alpha3')]
+        nm <- colnames(npars)
+        alphamin <- npars[1,c('alpha1min', 'alpha2min', 'alpha3min')] # find corresponding minimum alpha values
+        alphadiff <- alpha1-alphamin
+        if(any(alphadiff != 0)) {    # NB: this filters out learning rates that were set to a constant e.g., (0, 0.15)
+          idx <- which(alphadiff != 0)
+          if(any((alphadiff[idx] <= pnorm(-4)) | (alpha1[idx] >= pnorm(4)))) {
+            npars[,'t0'] <- npars[,'t0']+3
+            return(npars)
+          }
+        }
+
+        # remove not-updated columns
+        alphaIsZero <- round(learningRates[1,],6)==0
+        learningRates <- learningRates[,!alphaIsZero]
+        startValues <- startValues[!alphaIsZero]
+
+        outcomes <- as.matrix(outcomes)
+        if(ncol(outcomes)>1) outcomes <- as.matrix(outcomes[,!alphaIsZero[1:ncol(outcomes)]])
+
+        if(!all(alphaIsZero)) {
+          updated <- adapt.c.emc(feedback=outcomes,
+                                 arguments=list(startValues = startValues,
+                                                learningRates = learningRates),
+                                 learningRule='delta')
+        } else {
+          #### Nothing to update, return npars!
+          return(npars)
+        }
+
+        # construct updated Q-value matrix
+        allQs <- matrix(NA, nrow=nrow(outcomes), ncol=3)
+        if(sum(alphaIsZero)>0) allQs[,alphaIsZero] <- npars[da$lM, c('q01', 'q02', 'q03')][,alphaIsZero]    # re-add not-updated columns
+        if(!all(alphaIsZero)) allQs[,!alphaIsZero] <- updated$adaptedValues
+
+      } else if(adapt$dynamic$adapt_fun_name=='threshold') {
+        # Threshold learning. ONLY uses Q-value 3 --------------------------------------------------------------
+        da$lM <- as.logical(da$lM)
+        learningRates <- as.matrix(cbind(npars[da$lM,'alpha1'], npars[da$lM,'alpha2'], npars[da$lM,'alpha3'])) # TODO make this more flexible
+        startValues <- npars[1, c('q01', 'q02', 'q03')]
+
+        # if any of learning rates <= pnorm(-4) or >= pnorm(4), do not accept -- return parameters that are impossible so we get NAs
+        alpha1 <- npars[1,c('alpha1', 'alpha2', 'alpha3')]
+        nm <- colnames(npars)
+        alphamin <- npars[1,c('alpha1min', 'alpha2min', 'alpha3min')] # grepl('alpha.*min', nm)]   # find corresponding minimum alpha values
+        alphadiff <- alpha1-alphamin
+        if(any(alphadiff != 0)) {
+          idx <- which(alphadiff != 0)
+          if(any((alphadiff[idx] <= pnorm(-4)) | (alpha1[idx] >= pnorm(4)))) {
+            npars[,'t0'] <- npars[,'t0']+3
+            return(npars)
+          }
+        }
+
+        # find 'base' threshold, order to trial order.
+        b <- npars[order(da$trials),'B']
+
+        # get mean threshold of both accumulators
+        b <- apply(cbind(b[seq(1,length(b),2)], b[seq(2,length(b),2)]),1,mean)
+
+
+        updated <- adaptb.c.emc(b0=b,
+                                q0=startValues[3],
+                                weight=npars[1,'weight3'],
+                                learningRates=matrix(learningRates[,3], nrow=nrow(learningRates)),
+                                rts=outcomes[,3])
+
+        # reconstruct Q-value matrix
+        allQs <- matrix(0, nrow=nrow(outcomes), ncol=3)
+        allQs[,3] <- updated$adaptedValues[,2]           # Q3 from threshold updating
+      } else if(adapt$dynamic$adapt_fun_name=='deltadeltathreshold') {
+        # Combines 2 delta rules with threshold learning. --------------------------------------------------------------
+        da$lM <- as.logical(da$lM)
+        learningRates <- as.matrix(cbind(npars[da$lM,'alpha1'], npars[da$lM,'alpha2'], npars[da$lM,'alpha3']))
+        startValues <- npars[1, c('q01', 'q02', 'q03')]
+
+        # if any of learning rates <= pnorm(-4) or >= pnorm(4), do not accept -- return parameters that are impossible so we get NAs
+        alpha1 <- npars[1,c('alpha1', 'alpha2', 'alpha3')]
+        nm <- colnames(npars)
+        alphamin <- npars[1,c('alpha1min', 'alpha2min', 'alpha3min')] # grepl('alpha.*min', nm)]   # find corresponding minimum alpha values
+        alphadiff <- alpha1-alphamin
+        if(any(alphadiff != 0)) {
+          idx <- which(alphadiff != 0)
+          if(any((alphadiff[idx] <= pnorm(-4)) | (alpha1[idx] >= pnorm(4)))) {
+            npars[,'t0'] <- npars[,'t0']+3
+            return(npars)
+          }
+        }
+
+        # update threshold FIRST
+        # find 'base' threshold, order to trial order.
+        b <- npars[order(da$trials),'B']
+
+        # get mean threshold of both accumulators
+        b <- apply(cbind(b[seq(1,length(b),2)], b[seq(2,length(b),2)]),1,mean)
+        updated1 <- adaptb.c.emc(b0=b,
+                                q0=startValues[3],
+                                weight=npars[1,'weight3'],
+                                learningRates=matrix(learningRates[,3], nrow=nrow(learningRates)),
+                                rts=outcomes[,3])
+
+        # next, apply the delta rules
+        # only update Q1 and Q2
+        startValues <- startValues[1:2]
+        learningRates <- learningRates[,1:2]
+        outcomes <- as.matrix(outcomes[,1:2])
+
+        updated2 <- adapt.c.emc(feedback=outcomes,
+                               arguments=list(startValues = startValues,
+                                              learningRates = learningRates),
+                               learningRule='delta')
+
+        allQs <- matrix(NA, nrow=nrow(outcomes), ncol=3)
+        allQs[,3] <- updated1$adaptedValues[,2]   # Q3 from threshold updating
+        allQs[,1:2] <- updated2$adaptedValues[,1:2] # Q1, Q2 from delta rule
+      # } else if(adapt$dynamic$adapt_fun_name=='delta2LR') {
+      #   ##### THIS WAS NEVER USED. Didn't improve fit.
+      #   da$lM <- as.logical(da$lM)
+      #   learningRatesPos <- as.matrix(cbind(npars[da$lM,'alpha1Pos'], npars[da$lM,'alpha2Pos'], npars[da$lM,'alpha3Pos'])) # TODO make this more flexible
+      #   learningRatesNeg <- as.matrix(cbind(npars[da$lM,'alpha1Neg'], npars[da$lM,'alpha2Neg'], npars[da$lM,'alpha3Neg'])) # TODO make this more flexible
+      #   if(any(learningRatesNeg == -1)) {
+      #     learningRatesNeg[learningRatesNeg==-1] <- learningRatesPos[learningRatesNeg==-1]
+      #   }
+      #   startValues <- npars[1, c('q01', 'q02', 'q03')]
+      #
+      #   alpha1 <- npars[1,'alpha1Pos']
+      #   nm <- colnames(npars)
+      #   alphamin <- max(npars[1,grepl('alpha.*min', nm)])
+      #   if((alpha1-alphamin) != 0) {
+      #     if((alpha1 <= (pnorm(-4)+alphamin)) | (alpha1 >= pnorm(4))) {
+      #     npars[,'t0'] <- npars[,'t0']+3
+      #     return(npars)
+      #     }
+      #   }
+      #   # remove not-updated columns
+      #   alphaIsZero <- round(learningRatesPos[1,],6)==0
+      #   learningRatesPos <- learningRatesPos[,!alphaIsZero]
+      #   learningRatesNeg <- learningRatesNeg[,!alphaIsZero]
+      #   startValues <- startValues[!alphaIsZero]
+      #
+      #   outcomes <- as.matrix(outcomes)
+      #   if(ncol(outcomes)>1) outcomes <- as.matrix(outcomes[,!alphaIsZero])
+      #
+      #   if(!all(alphaIsZero)) {
+      #     updated <- adapt.c.emc(feedback=outcomes,
+      #                            arguments=list(startValues = startValues,
+      #                                           learningRatesPos = learningRatesPos,
+      #                                           learningRatesNeg = learningRatesNeg),
+      #                            learningRule='delta2LR')
+      #   } else {
+      #     #### Nothing to update, return npars!
+      #     return(npars)
+      #   }
+      #
+      #   allQs <- matrix(NA, nrow=nrow(outcomes), ncol=3)
+      #   if(sum(alphaIsZero)>0) allQs[,alphaIsZero] <- npars[da$lM, c('q01', 'q02', 'q03')][,alphaIsZero]
+      #   if(!all(alphaIsZero)) allQs[,!alphaIsZero] <- updated$adaptedValues
+      }
+
+      # apply output function
+      npars[,adapt$dynamic$output_name] <- adapt$dynamic$output_fun(npars, allQs[index,], da)
+      npars[,c('q01', 'q02', 'q03')] <- allQs[index,]
+      npars[is.na(npars)] <- 0  # remove NA values -- these shouldn't be here, but sometimes are and cause errors in likelihood calculations
+      return(npars)
+    }
+  } else if(adapt$useSMsApproach) {
+    if(!is.null(adapt$dynamic)) {
+      outcomes <- attr(da, 'adapt')[[s]]$outcomes
+      index <- attr(da, 'adapt')[[s]]$index  # index goes from trial-order to da-order
+      npars <- npars[da$subjects==s,]
+      da <- da[da$subjects==s,]
+
+      ## Ugh ugly!! Do DCT transform here (if applicable)
+      if(!is.null(attr(da, 'model')()$DCTtransform)) {
+        npars <- attr(da, 'model')()$DCTtransform(npars=npars, da=da, s)
+      }
+      if(!is.null(attr(da, 'model')()$trendTransform)) {
+        npars <- attr(da, 'model')()$trendTransform(npars=npars, da=da, s)
+      }
+      if(!is.null(attr(da, 'model')()$polytransform)) {
+        npars <- attr(da, 'model')()$polytransform(npars=npars, da=da, s)
+      }
+
+      ## add some columns that could be useful for updating
+      da$R <- factor(da$R, levels=levels(da$lR))
+      da$rt2 <- NA
+      da$resp <- NA
+
+      ##
+      startValues <- npars[1, c('q01', 'q02', 'q03')]
+
+      ## add response
+      add_response <- any(is.na(da$R))
+      if(is.null(rfun)) rfun <- attr(da, 'model')()$rfun
+
+      if(adapt$dynamic$adapt_fun_name != 'delta2LR') {
+        learningRates <- as.matrix(cbind(npars[,'alpha1'], npars[,'alpha2'], npars[,'alpha3']))  # TODO make this more flexible
+      } else {
+        learningRatesPos <- as.matrix(cbind(npars[,'alpha1Pos'], npars[,'alpha2Pos'], npars[,'alpha3Pos']))
+        learningRatesNeg <- as.matrix(cbind(npars[,'alpha1Neg'], npars[,'alpha2Neg'], npars[,'alpha3Neg']))
+        learningRatesNeg[learningRatesNeg==-1] <- learningRatesPos[learningRatesNeg==-1]
+      }
+
+      for(trial in 1:nrow(outcomes)) {
+        Ri <- da$trials==trial    # Ri goes from da-order to trial-order
+
+        # what is Q?
+        if(trial == 1) {
+          allQs <- startValues
+        }
+
+        # update npars
+        npars[Ri,adapt$dynamic$output_name] <- adapt$dynamic$output_fun(npars[Ri,], matrix(allQs, nrow=nrow(npars[Ri,]), ncol=3, byrow=TRUE), da[Ri,])
+
+        # simulate trial
+        Rrt <- rfun(da[Ri,'lR'], npars[Ri,])
+#        print(Rrt)
+        da[Ri, 'rt'] <- Rrt[,'rt']
+        da[Ri, 'R'] <- Rrt[,'R']
+        da[Ri, 'accuracy'] <- as.character(da[Ri, 'S']) == as.character(da[Ri,'R'])
+
+        # da[Ri, 'rt2'] <- da[Ri, 'rt']
+        # da[Ri&da[Ri,'accuracy']==FALSE, 'rt2'] <- NA
+        #
+        # da[Ri, 'resp'] <- as.numeric(da[Ri,'R'])
+        # da[Ri&da[Ri,'resp']==2,'resp'] <- -1
+
+        # update Q-values, npars
+        if(trial < nrow(outcomes)) {
+          feedback <- as.numeric(da[Ri,adapt$dynamic$columns_to_include][1,])
+          if(adapt$dynamic$adapt_fun_name %in% c('threshold', 'deltadeltathreshold')) {
+            feedback[3] <- mean(npars[Ri,'B'])/da[Ri,'rt'][1]   # estimated difficulty/drift
+          }
+
+          # we're assuming delta here
+          for(ii in 1:length(allQs)) {
+            PE <- feedback[ii]-allQs[ii]
+            if(is.na(PE)) next  # no update, continue
+            if(adapt$dynamic$adapt_fun_name%in%c('delta', 'threshold', 'deltadeltathreshold')) {
+              allQs[ii] <- allQs[ii] + learningRates[trial,ii]*PE
+            } else {
+              if(PE < 0) {
+                allQs[ii] <- allQs[ii] + learningRatesNeg[trial,ii]*PE
+              } else {
+                allQs[ii] <- allQs[ii] + learningRatesPos[trial,ii]*PE
+              }
+            }
+          }
+        }
+      }
+      return(da)
+    } else {
+    outcomes <- attr(da, 'adapt')[[s]]$outcomes
+    index <- attr(da, 'adapt')[[s]]$index
+    npars <- npars[da$subjects==s,]
+    da <- da[da$subjects==s,]
+
+    add_response <- any(is.na(da$R))
+    if(add_response) {
+      if(is.null(rfun)) rfun <- attr(da, 'model')()$rfun
+      ## extract probability of winning per trial & stimulus
+      pArray <- attr(da, 'adapt')[[s]]$pArray
+
+      # reset
+      outcomes <- matrix(NA, ncol=ncol(outcomes), nrow=nrow(outcomes), dimnames=dimnames(outcomes))
+    }
+
+    # todo: make this a 3dimensional array, of nTrials x nChoices x learningThing
+    # with 'learningThing' being predictions(/Q), uncertainty, volatility; possibly also PEs?
+    learn <- array(NA, dim=c(nrow(outcomes), ncol(outcomes), length(adapt$stimulus$init_par)))
+    dimnames(learn) <- list(NULL, colnames(outcomes), adapt$stimulus$init_par)
+
+    # learn <- matrix(NA, nrow=nrow(outcomes), ncol=ncol(outcomes), dimnames = dimnames(outcomes))
+    if(length(npars[1,adapt$stimulus$init_par]) > 1) {
+      learn[1,,] <- matrix(npars[1,adapt$stimulus$init_par],
+                           ncol=length(npars[1,adapt$stimulus$init_par]),
+                           nrow=nrow(learn[1,,]), byrow=TRUE) #  # initialize
+    } else {
+      learn[1,,] <- npars[1,adapt$stimulus$init_par]
+    }
+
+    # update
+    for(trial in 1:nrow(learn)) {
+      Ri <- da$trials==trial
+
+      # Update parameters
+      Q <- learn[cbind(index,1)][Ri]
+      if(('ws' %in% adapt$stimulus$output_par_names) & ('wd' %in% adapt$stimulus$output_par_names)) {
+        indexOther <- attr(da, 'adapt')[[s]]$indexOther
+        Q <- cbind(Q, learn[cbind(indexOther,1)][Ri])
+      }
+
+      npars[Ri,adapt$stimulus$output_name] <- adapt$stimulus$output_fun(npars[Ri,adapt$stimulus$output_par_names], Q)
+
+      ## check if response needs to be generated
+      if(add_response) {
+        # simulate response
+        Rrt <- rfun(factor(levels=da[Ri,'lS']),npars[Ri,])
+        da[Ri, 'rt'] <- Rrt[,'rt']
+        da[Ri, 'lRS'] <- as.character(Rrt[,'R'])
+        da[Ri, 'R'] <- ifelse(all(as.character(da[Ri,'s_left']) == as.character(Rrt[,'R'])), 'left', 'right')
+        da[Ri, 'winner'] <- da[Ri, 'lRS']==da[Ri,'lS']
+#        da[Ri, 'rt2'] = da[Ri,'rt'] #*da[Ri, 'winner']
+#        da[Ri&da[Ri,'winner']==FALSE, 'rt2'] <- NA
+
+        ## AGAIN, here we assume *ONLY* the winner receives feedback!
+        reward <- setNames(rbinom(length(da[Ri,'lS']), 1, pArray[trial,as.character(da[Ri,'lS'])]), da[Ri,'lS'])
+        outcomes[trial,as.character(da[Ri&da$winner,'lRS'])] <- reward[da[Ri,'winner']]
+      }
+
+      ## update
+      if(trial < nrow(learn)) {
+        for(column in 1:ncol(learn)) {
+          if(!is.na(outcomes[trial,column])) {
+            # feedback was given, so update
+            learn[trial+1,column,] <- adapt$stimulus$adapt_fun(lastValues=learn[trial,column,],
+                                                               parameters=npars[trial,adapt$stimulus$adapt_par],
+                                                               reward=outcomes[trial,column])
+          } else {
+            learn[trial+1,column,] <- learn[trial,column,]
+          }
+        }
+      }
+    }
+    if (return_all) return(list(learn=learn,pars=npars,data=da))
+    if (return_learning) return(learn)
+    if (mapped_p) return(list(data=da,pars=npars))
+    if (add_response) return(da)
+    return(npars)
+    }
+  }
+  # else {
+  #   index <- attr(da,"adapt")[[s]]$stimulus$index
+  #   learn <- attr(da,"adapt")[[s]]$stimulus$learn
+  #   npars <- npars[da$subjects==s,]
+  #   da <- da[da$subjects==s,]
+  #   add_response <- any(is.na(da$R))
+  #   nAcc <- dim(adapt$stimulus$targets)[1]
+  #   namAcc <- dimnames(adapt$stimulus$targets)[[1]]
+  #   nStim <- dim(adapt$stimulus$targets)[2]
+  #   namStim <- colnames(adapt$stimulus$targets)
+  #   # Maximum number of Q updates
+  #   maxQupdates <- dim(index)[1]/nAcc
+  #   # fill an array of parameters, dim = accumulator x trial x
+  #   # stimulus x parameter type ("v0"    "B"     "t0"    "alpha" "w"     "q0"    "A" )
+  #   parArr <- aperm(
+  #     array(apply(index,2,function(x){npars[x,]}),
+  #           dim=c(nAcc,maxQupdates,dim(npars)[2],nStim),
+  #           dimnames=list(namAcc,NULL,dimnames(npars)[[2]],namStim)),
+  #     c(1,2,4,3)) # reorder to make look up quick in loop
+  #   # fill prob reward array: trials x stimulus x stimulus component
+  #   # pReward <- array(as.vector(sapply(dimnames(adapt$stimulus$targets)[[1]],function(x){
+  #   #   da[index,paste("p",x,sep="_")]})),dim=c(nAcc,maxQupdates,nStim,nAcc),
+  #   #   dimnames=list(namAcc,NULL,namStim,namAcc))[1,,,]
+  #   pReward <- array(array(as.vector(sapply(dimnames(adapt$stimulus$targets)[[1]],function(x){
+  #     da[index,paste("p",x,sep="_")]})),dim=c(nAcc,maxQupdates,nStim,nAcc))[1,,,],
+  #     dim=c(maxQupdates,nStim,nAcc),dimnames=list(NULL,namStim,namAcc))
+  #
+  #   # Extract Q values and update
+  #   if (add_response) {
+  #     da_reward <- da_rt <- rep(NA,dim(da)[1])         # Rewards and rts
+  #     da_R <- factor(da_reward,levels=namAcc)          # Response factor
+  #     Ri <- array(index,dim=c(nAcc,maxQupdates,nStim)) # Row indices
+  #   } else {
+  #     # maxQupdates rows, nStim columns
+  #     Rmat <- array(da[index,"R"], dim=c(nAcc,maxQupdates,nStim))[1,,]
+  #     reward_mat <- array(da[index,"reward"], dim=c(nAcc,maxQupdates,nStim))[1,,]
+  #   }
+  #   for (i in 1:maxQupdates)  {
+  #     ok <- !is.na(parArr[1,i,,1]) # stimuli that need updating
+  #     if (i==1) learn[,ok,i] <- parArr[,1,,adapt$stimulus$init_par] # Initialize
+  #     # pick out fixed pars
+  #     pars <- setNames(data.frame(matrix(parArr[,i,,][,ok,adapt$fixed_pars,drop=FALSE],
+  #                                        ncol=length(adapt$fixed_pars))),adapt$fixed_pars)
+  #
+  #     # SM: advantage framework, ONLY 2AFC SO FAR!
+  #     Q <- as.vector(learn[,,i][,ok])
+  #     if(('ws' %in% adapt$stimulus$output_par_names) & ('wd' %in% adapt$stimulus$output_par_names)) {
+  #       Q <- cbind(Q, as.vector(learn[c(2,1),,i][,ok]))
+  #     }
+  #
+  #     # calculate and add output_par
+  #     pars[[adapt$stimulus$output_name]] <- adapt$stimulus$output_fun(
+  #       output_pars=matrix(parArr[,i,ok,adapt$stimulus$output_par_names],
+  #                          ncol=length(adapt$stimulus$output_par_names)),
+  #       Q=Q) #as.vector(learn[,,i][,ok]))
+  #
+  #
+  #     if (add_response) { # Simulate trial
+  #       Rrt <- rfun(factor(levels=dimnames(adapt$stimulus$targets)[[1]]),pars)
+  #       Rfac <- Rrt[,"R"]
+  #       reward <- rbinom(length(Rfac),1,pReward[i,ok,][cbind(1:length(Rfac),as.numeric(Rfac))])
+  #       # harvest new trial info
+  #       da_rt[Ri[,i,][,ok,drop=FALSE]] <- rep(Rrt[,"rt"],each=nAcc)
+  #       da_reward[Ri[,i,][,ok,drop=FALSE]] <- rep(reward,each=nAcc)
+  #       da_R[Ri[,i,][,ok,drop=FALSE]] <- rep(Rfac,each=nAcc)
+  #     } else { # Extract trial information
+  #       Rfac <- factor(Rmat[i,ok],levels=namAcc)
+  #       reward <- reward_mat[i,ok]
+  #     }
+  #     if (i<maxQupdates) { # Update Q value
+  #       learn[,ok,i+1] <- learn[,ok,i] # Copy last for all components
+  #       imat <- cbind(as.numeric(Rfac),1:sum(ok)) # Components to update
+  #       learn[,ok,i+1][imat] <- adapt$stimulus$adapt_fun(Qlast=learn[,,i][,ok,drop=FALSE][imat],
+  #                                                        adapt_par=parArr[,i,,adapt$stimulus$adapt_par][,ok,drop=FALSE][imat],reward)
+  #     }
+  #     if (mapped_p | !add_response | return_all) # Output will be new so update parrArr
+  #       parArr[,i,,adapt$stimulus$output_name][!is.na(parArr[,i,,adapt$stimulus$output_name])] <-
+  #       pars[,adapt$stimulus$output_name]
+  #   }
+  #   if (add_response) {
+  #     da$R <- da_R
+  #     da$reward <- da_reward
+  #     da$rt <- da_rt
+  #     attr(da,"adapt")[[s]]$stimulus$learn <- learn
+  #   }
+  #   if (mapped_p | !add_response | return_all) {
+  #     stim_output <- parArr[,,,adapt$stimulus$output_name][!is.na(index)]
+  #     # Protect against numerical problems, may screw up dfun for some models
+  #     stim_output[is.na(stim_output)|is.nan(stim_output)] <- -Inf
+  #     npars[index[!is.na(index)],adapt$stimulus$output_name] <- stim_output
+  #   }
+  #
+  #   if (return_all) return(list(learn=learn,pars=npars,data=da))
+  #   if (return_learning) return(learn)
+  #   if (mapped_p) return(list(data=da,pars=npars))
+  #   if (add_response) return(da)
+  #   npars
+  # }
+}
+
+
+
+
+# data=dadm
+adapt_data <- function(data,design,model,pars,
+                       add_response=FALSE,return_learning=FALSE,mapped_p=FALSE,return_all=FALSE)
+  # runs learning, and either returns learning, or data with responses and rt
+  # added (either if data has NA in R or if add_Response), or adapted parameters
+  # or data + parameters (mapped_p)
+{
+  if (return_all & mapped_p) {
+    warning("return_all and mapped_p incompatible, going with the latter")
+    return_all <- FALSE
+  }
+  if (add_response) data$R <- NA # Force new data generation ignoring old data
+  if ( all(is.na(data$R)) ) add_response <- TRUE # make new if none supplied
+  # add augmentation
+  if (is.null(attr(data,"adapt"))) {
+    attr(data,"adapt") <- setNames(
+      lapply(levels(data$subjects),augment,da=data,design=design),
+      levels(data$subjects))
+    attr(data,"adapt")$design <- design$adapt
+  }
+  daList <- setNames(
+    lapply(levels(data$subjects),update_pars,npars=pars,da=data,return_all=return_all,
+           rfun=model()$rfun,return_learning=return_learning,mapped_p=mapped_p),
+    levels(data$subjects))
+  if (return_learning) return(daList)
+  adapt <- attr(data,"adapt")
+  if (mapped_p | return_all) {
+    data <- do.call(rbind,lapply(daList,function(x)x$data))
+    pars <- do.call(rbind,lapply(daList,function(x)x$pars))
+    if (mapped_p) return(cbind(data[,!(names(data) %in% c("R","rt"))],pars))
+    for (i in names(daList)) adapt[[i]] <- attr(daList[[i]]$data,"adapt")[[i]]
+    data <- cbind(data,pars)
+    attr(data,"adapt") <- adapt
+    return(list(learn=lapply(daList,function(x)x$learn),data=data))
+  }
+  for (i in names(daList)) adapt[[i]] <- attr(daList[[i]],"adapt")[[i]]
+  data <- do.call(rbind,daList)
+  attr(data,"adapt") <- adapt
+  data
+}
+
+
+# augment = function(s,da,design)
+#   # Adds attributes to augmented data
+#   # learn: empty array for Q values with dim = choice alternative (low,high) x
+#   #   stimulus x trials (max across stimuli)
+#   # index: look up (row number) for stimuli in da, a matrix dim  = max trials x
+#   #   stimulus matrix (rows for each choice alternative contiguous)
+# {
+#   getIndex <- function(typei,cname,da,maxn) {
+#     out <- which(da[,cname]==typei)
+#     c(out,rep(NA,maxn-length(out)))
+#   }
+#
+#   if (!is.null(design$adapt$stimulus)) {
+#     targets <- design$adapt$stimulus$targets
+#     par <- design$adapt$stimulus$output_name
+#     maxn <- max(sapply(dimnames(targets)[[1]],function(x){table(da[da$subjects==s,x])}))
+#     # da index x stimulus
+#     out <- sapply(targets[1,],getIndex,cname=dimnames(targets)[[1]][1],
+#                   da=da[da$subjects==s,],maxn=maxn)
+#     stimulus <- list(index=out)
+#     # accumulator x stimulus x trials
+#     stimulus$learn <- array(NA,dim=c(dim(targets),maxn/dim(targets)[1]),
+#                             dimnames=list(rownames(targets),targets[1,],NULL))
+#     stimulus$targets <- targets
+#     stimulus$par <- par
+#   } # add other types here
+#   list(stimulus=stimulus)
+# }
+#
+# # ARCHITECTURE OF FOLLOWING FUNCTION WILL NEED UPDATING FOR MULTIPLE ADAPT TYPES
+# # s="10";npars=pars;da=data; rfun=model()$rfun;return_learning=FALSE;mapped_p=FALSE
+# update_pars = function(s,npars,da,rfun=NULL,return_learning=FALSE,mapped_p=FALSE,
+#                        return_all=FALSE)
+#   # for subject s
+#   # Either return da filling in responses and RT if da has no responses (in
+#   # in which case rfun must be supplied), or return npars filling in adapted
+#   # parameters or if return_learning returns learning (e.g., Q values)
+# {
+#
+#   adapt <- attr(da,"adapt")$design
+#   index <- attr(da,"adapt")[[s]]$stimulus$index
+#   learn <- attr(da,"adapt")[[s]]$stimulus$learn
+#   npars <- npars[da$subjects==s,]
+#   da <- da[da$subjects==s,]
+#   add_response <- any(is.na(da$R))
+#   nAcc <- dim(adapt$stimulus$targets)[1]
+#   namAcc <- dimnames(adapt$stimulus$targets)[[1]]
+#   nStim <- dim(adapt$stimulus$targets)[2]
+#   namStim <- colnames(adapt$stimulus$targets)
+#   # Maximum number of Q updates
+#   maxQupdates <- dim(index)[1]/nAcc
+#   # fill an array of parameters, dim = accumulator x trial x
+#   # stimulus x parameter type ("v0"    "B"     "t0"    "alpha" "w"     "q0"    "A" )
+#   parArr <- aperm(
+#     array(apply(index,2,function(x){npars[x,]}),
+#           dim=c(nAcc,maxQupdates,dim(npars)[2],nStim),
+#           dimnames=list(namAcc,NULL,dimnames(npars)[[2]],namStim)), c(1,2,4,3)) # reorder to make look up quick in loop
+#   # fill prob reward array: trials x stimulus x stimulus component
+#   # pReward <- array(as.vector(sapply(dimnames(adapt$stimulus$targets)[[1]],function(x){
+#   #   da[index,paste("p",x,sep="_")]})),dim=c(nAcc,maxQupdates,nStim,nAcc),
+#   #   dimnames=list(namAcc,NULL,namStim,namAcc))[1,,,]
+#   pReward <- array(array(as.vector(sapply(dimnames(adapt$stimulus$targets)[[1]],function(x){
+#     da[index,paste("p",x,sep="_")]})),dim=c(nAcc,maxQupdates,nStim,nAcc))[1,,,],
+#     dim=c(maxQupdates,nStim,nAcc),dimnames=list(NULL,namStim,namAcc))
+#
+#   # Extract Q values and update
+#   if (add_response) {
+#     da_reward <- da_rt <- rep(NA,dim(da)[1])         # Rewards and rts
+#     da_R <- factor(da_reward,levels=namAcc)          # Response factor
+#     Ri <- array(index,dim=c(nAcc,maxQupdates,nStim)) # Row indices
+#   } else {
+#     # maxQupdates rows, nStim columns
+#     Rmat <- array(da[index,"R"], dim=c(nAcc,maxQupdates,nStim))[1,,]
+#     reward_mat <- array(da[index,"reward"], dim=c(nAcc,maxQupdates,nStim))[1,,]
+#   }
+#   for (i in 1:maxQupdates)  {
+#     ok <- !is.na(parArr[1,i,,1]) # stimuli that need updating
+#     if (i==1) learn[,ok,i] <- parArr[,1,,adapt$stimulus$init_par] # Initialize
+#     # pick out fixed pars
+#     pars <- setNames(data.frame(matrix(parArr[,i,,][,ok,adapt$fixed_pars,drop=FALSE],
+#                                        ncol=length(adapt$fixed_pars))),adapt$fixed_pars)
+#     # calculate and add output_par
+#     pars[[adapt$stimulus$output_name]] <- adapt$stimulus$output_fun(
+#       output_pars=matrix(parArr[,i,ok,adapt$stimulus$output_par_names],
+#                          ncol=length(adapt$stimulus$output_par_names)),
+#       Q=as.vector(learn[,,i][,ok]))
+#     if (add_response) { # Simulate trial
+#       Rrt <- rfun(factor(levels=dimnames(adapt$stimulus$targets)[[1]]),pars)
+#       Rfac <- Rrt[,"R"]
+#       reward <- rbinom(length(Rfac),1,pReward[i,ok,][cbind(1:length(Rfac),as.numeric(Rfac))])
+#       # harvest new trial info
+#       da_rt[Ri[,i,][,ok,drop=FALSE]] <- rep(Rrt[,"rt"],each=nAcc)
+#       da_reward[Ri[,i,][,ok,drop=FALSE]] <- rep(reward,each=nAcc)
+#       da_R[Ri[,i,][,ok,drop=FALSE]] <- rep(Rfac,each=nAcc)
+#     } else { # Extract trial information
+#       Rfac <- factor(Rmat[i,ok],levels=namAcc)
+#       reward <- reward_mat[i,ok]
+#     }
+#     if (i<maxQupdates) { # Update Q value
+#       learn[,ok,i+1] <- learn[,ok,i] # Copy last for all components
+#       imat <- cbind(as.numeric(Rfac),1:sum(ok)) # Components to update
+#       learn[,ok,i+1][imat] <- adapt$stimulus$adapt_fun(Qlast=learn[,,i][,ok,drop=FALSE][imat],
+#                                                        adapt_par=parArr[,i,,adapt$stimulus$adapt_par][,ok,drop=FALSE][imat],reward)
+#     }
+#     if (mapped_p | !add_response | return_all){
+#       # Output will be new so update parrArr
+#       parArr[,i,,adapt$stimulus$output_name][!is.na(parArr[,i,,adapt$stimulus$output_name])] <-pars[,adapt$stimulus$output_name]
+#     }
+#   }
+#   if (add_response) {
+#     da$R <- da_R
+#     da$reward <- da_reward
+#     da$rt <- da_rt
+#     attr(da,"adapt")[[s]]$stimulus$learn <- learn
+#   }
+#   if (mapped_p | !add_response | return_all) {
+#     stim_output <- parArr[,,,adapt$stimulus$output_name][!is.na(index)]
+#     # Protect against numerical problems, may screw up dfun for some models
+#     stim_output[is.na(stim_output)|is.nan(stim_output)] <- -Inf
+#     npars[index[!is.na(index)],adapt$stimulus$output_name] <- stim_output
+#   }
+#   if (return_all) return(list(learn=learn,pars=npars,data=da))
+#   if (return_learning) return(learn)
+#   if (mapped_p) return(list(data=da,pars=npars))
+#   if (add_response) return(da)
+#   npars
+# }
+#
+# # data=dadm
+# adapt_data <- function(data,design,model,pars,
+#                        add_response=FALSE,return_learning=FALSE,mapped_p=FALSE,return_all=FALSE)
+#   # runs learning, and either returns learning, or data with responses and rt
+#   # added (either if data has NA in R or if add_Response), or adapted parameters
+#   # or data + parameters (mapped_p)
+# {
+#   if (return_all & mapped_p) {
+#     warning("return_all and mapped_p incompatible, going with the latter")
+#     return_all <- FALSE
+#   }
+#   if (add_response) data$R <- NA # Force new data generation ignoring old data
+#   if ( all(is.na(data$R)) ) add_response <- TRUE # make new if none supplied
+#   # add augmentation
+#   if (is.null(attr(data,"adapt"))) {
+#     attr(data,"adapt") <- setNames(
+#       lapply(levels(data$subjects),augment,da=data,design=design),
+#       levels(data$subjects))
+#     attr(data,"adapt")$design <- design$adapt
+#   }
+#   daList <- setNames(
+#     lapply(levels(data$subjects),update_pars,npars=pars,da=data,return_all=return_all,
+#            rfun=model()$rfun,return_learning=return_learning,mapped_p=mapped_p),
+#     levels(data$subjects))
+#   if (return_learning) {
+#     return(daList)
+#   }
+#   adapt <- attr(data,"adapt")
+#   if (mapped_p | return_all) {
+#     data <- do.call(rbind,lapply(daList,function(x)x$data))
+#     pars <- do.call(rbind,lapply(daList,function(x)x$pars))
+#     if (mapped_p) {
+#       return(cbind(data[,!(names(data) %in% c("R","rt"))],pars))
+#     }
+#     for (i in names(daList)){
+#       adapt[[i]] <- attr(daList[[i]]$data,"adapt")[[i]]
+#     }
+#     data <- cbind(data,pars)
+#     attr(data,"adapt") <- adapt
+#     return(list(learn=lapply(daList,function(x)x$learn),data=data))
+#   }
+#   for (i in names(daList)){
+#     adapt[[i]] <- attr(daList[[i]],"adapt")[[i]]
+#   }
+#   data <- do.call(rbind,daList)
+#   attr(data,"adapt") <- adapt
+#   data
+# }
