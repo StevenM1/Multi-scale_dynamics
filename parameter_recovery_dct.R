@@ -212,108 +212,105 @@ if(do_fit) emc <- fit(emc, cores_per_chain = cores_per_chain, cores_for_chains =
                       fileName=samplers_fn, verbose=TRUE, verboseProgress=TRUE, max_tries = 20)
 
 
+## plot
+trendModels <- rep('DCT', 4)
+trendPars <- c('B', 'v', 'v', 'B')
+nTrendParss <- rep(3, 4)
+learningModels <- c('zSMuAHbV', 'zSMuAHbV', 'zSMuAHbV','zSMuAHbV')
+tasks <- c('wagenmakers2004_CS', 'forstmann2008', 'mileticvanmaanen2019exp2block2', 'wagenmakers2008exp2')
+for(i in 1:length(tasks)) {
+  dataset <- task <- tasks[i]
+  learningModel <- learningModels[i]
+  trendModel <- trendModels[i]
+  trendPar <- trendPars[i]
+  nTrendPars <- nTrendParss[i]
+
+  simData_fn <- file.path(root_dir, 'parameter_recovery', 'datasets', paste0(dataset, '_', learningModel, '_', trendModel, nTrendPars, trendPar, '_simulated_data.RData'))
+  simulatedData <- EMC2:::loadRData(simData_fn)
+  samplers_fn <- generate_filenames(dataset=dataset, learningModel=learningModel, trendModel=trendModel, trendPar=trendPar, nTrendPars=nTrendPars, samples_dir = './parameter_recovery/samples')
+  samples <- EMC2:::loadRData(samplers_fn)
+
+  #subfilter=0
+  idx <- which(samples[[1]]$samples$stage=='sample')
+  # idx <- idx[(length(idx)-subfilter):length(idx)]
+  alpha <- abind(lapply(samples, function(x) x$samples$alpha[,,idx]), along=3)
+  mu <- abind(lapply(samples, function(x) x$samples$theta_mu[,idx]), along=2)
+  fitParsMean <- apply(alpha,1:2,mean)
+  fitParsQps <- apply(alpha,1:2,quantile, c(0.025, .5, 0.975))
+  fitMuQps <- apply(mu, 1, quantile, c(0.025, 0.5, 0.975))
+
+  truePars <- attr(simulatedData, 'pars')
+
+  pname_mapping = list('v'='$u$',
+                       'v_lMd'='$dv$',
+                       'B'='b',
+                       'B_Ea-n'='$b_{a-n}$',
+                       'B_Ea-s'='$b_{a-s}$',
+                       'B_lRd'='$b_{l-r}$',
+                       't0'='$t_0$',
+                       's_lMd'='$ds$',
+                       'alpha3'='$\\alpha_{FM}$',
+                       'weight3'='$w_{FM}$',
+                       'alpha2'='$\\alpha_{AM}$',
+                       'weight2'='$w_{AM}$',
+                       'alpha1'='$\\alpha_{SM}$',
+                       'weight1'='$w_{SM}$',
+                       's_errorAccumulatorTRUE'='$ds$',
+                       'v_lMTRUE'='$dv$',
+                       'v_lMTRUE:Wvlf'='$dv:W_{vlf}$',
+                       'v_lMTRUE:Whf'='$dv:W_{hf}$',
+                       'v_lMTRUE:Wnonword'='$dv:W_{hf}$')
+
+  for(ii in 1:10) {
+    pname_mapping[paste0('vcos', ii)] = paste0('$\\beta_{',ii,'}$')
+    pname_mapping[paste0('Bcos', ii)] = paste0('$\\beta_{',ii,'}$')
+  }
 
 
+  nrows <- 3
+  if(task %in% c('forstmann2008', 'wagenmakers2008exp2')) {
+    if(trendModel!='NULL') nrows <- nrows+1
+  }
 
-#
-#
-#
-#
-# # Visualize recovery ------------------------------------------------------
-# #task <- 'wagenmakers2004_CS' #'wagenmakers2004_CS'
-# tasks <- c('wagenmakers2004_CS', 'forstmann2008', 'mileticvanmaanen2019exp2block2', 'wagenmakers2008exp2')
-# for(dataset in tasks) {
-#   simData_fn <- file.path(root_dir, 'parameter_recovery', 'datasets', paste0(dataset, '_', learningModel, '_', trendModel, '_simulated_data.RData'))
-#   simulatedData <- EMC2:::loadRData(simData_fn)
-#   samplers_fn <- generate_filenames(dataset=dataset, learningModel=learningModel, trendModel=trendModel, trendPar=trendPar, nTrendPars=nTrendPar, samples_dir = './parameter_recovery/samples')
-#   samples <- EMC2:::loadRData(samplers_fn)
-#
-#   #subfilter=0
-#   idx <- which(samples[[1]]$samples$stage=='sample')
-#   # idx <- idx[(length(idx)-subfilter):length(idx)]
-#   alpha <- abind(lapply(samples, function(x) x$samples$alpha[,,idx]), along=3)
-#   mu <- abind(lapply(samples, function(x) x$samples$theta_mu[,idx]), along=2)
-#   fitParsMean <- apply(alpha,1:2,mean)
-#   fitParsQps <- apply(alpha,1:2,quantile, c(0.025, .5, 0.975))
-#   fitMuQps <- apply(mu, 1, quantile, c(0.025, 0.5, 0.975))
-#
-#   truePars <- attr(simulatedData, 'pars')
-#
-#   pname_mapping = list('v'='$u$',
-#                        'v_lMd'='$dv$',
-#                        'B'='b',
-#                        'B_Ea-n'='$b_{a-n}$',
-#                        'B_Ea-s'='$b_{a-s}$',
-#                        'B_lRd'='$b_{l-r}$',
-#                        't0'='$t_0$',
-#                        's_lMd'='$ds$',
-#                        'alpha3'='$\\alpha_{FM}$',
-#                        'weight3'='$w_{FM}$',
-#                        'alpha2'='$\\alpha_{AM}$',
-#                        'weight2'='$w_{AM}$',
-#                        'alpha1'='$\\alpha_{SM}$',
-#                        'weight1'='$w_{SM}$',
-#                        's_errorAccumulatorTRUE'='$ds$',
-#                        'v_lMTRUE'='$dv$',
-#                        'v_lMTRUE:Wvlf'='$dv:W_{vlf}$',
-#                        'v_lMTRUE:Whf'='$dv:W_{hf}$',
-#                        'v_lMTRUE:Wnonword'='$dv:W_{hf}$')
-#
-#   for(i in 1:10) {
-#     pname_mapping[paste0('vcos', i)] = paste0('$\\beta_{',i,'}$')
-#     pname_mapping[paste0('Bcos', i)] = paste0('$\\beta_{',i,'}$')
-#   }
-#
-#
-#   if(task == 'forstmann2008') {
-#     nrows=3
-#   } else if(task == 'wagenmakers2004_CS') {
-#     nrows=3
-#   } else if(task == 'mileticvanmaanen2019exp2block2') {
-#     nrows=3
-#   } else {
-#     nrows=3
-#   }
-#
-#   for(ftype in c('jpeg', 'pdf')) {
-#     fn = paste0('./figures/parameter_recovery_', task, '.pdf')
-#     if(ftype == 'pdf') pdf(file=fn, width=8, height=nrows*2)
-#     if(ftype == 'jpeg') jpeg(gsub('.pdf','.jpeg',fn), width=8, height=nrows*2, units='in', quality=100, res=500)
-#
-#     par(mfrow=c(nrows,5), mar=c(3,3,2,.5), bty='l', mgp=c(2,.5,0), tck=-0.05)
-#     for(pname in colnames(truePars)) {
-#       pname_label = pname_mapping[[pname]]
-#       x<-truePars[,pname]
-#       y<-fitParsQps[2,pname,]
-#       xlim <- ylim <- range(c(x,fitParsQps[,pname,]))
-#
-#       CI_contains_x <- fitParsQps[3,pname,] > x & fitParsQps[1,pname,] < x
-#
-#       xmean <- mean(x)
-#
-#       xlab <- ifelse(which(pname == colnames(truePars))>(nrows-1)*5, 'Data generating', '')
-#       ylab <- ifelse(which(pname == colnames(truePars)) %% 5 == 1, 'Posterior (95% CI)', '')
-#       plot(x,y, main=TeX(pname_label), xlab=xlab, ylab=ylab, xlim=xlim, ylim=ylim)
-#       arrows(x0=x, y0=fitParsQps[1,pname,], y1=fitParsQps[3,pname,], code=3, angle=90, length=.025, col=adjustcolor(1, alpha.f=.5))
-#       legend('topleft', paste0('r=',round(cor(x,y),2)), bty='n', cex=.8)
-#       legend('bottomright', paste0(round(mean(CI_contains_x)*100,1), '%'), bty='n', cex=.8)
-#       abline(a=0,b=1)
-#
-#       # group-level recovery plot
-#       # if(pname %in% colnames(fitMuQps)) {
-#       #   usr <- par('usr')
-#       #   arrows(x0=usr[1],
-#       #          y0=fitMuQps[1,pname],
-#       #          y1=fitMuQps[3,pname],
-#       #          code=3,
-#       #          angle=90,
-#       #          length=0.025, col=2, lwd=2,
-#       #          xpd=TRUE
-#       #   )
-#       #   segments(x0=xmean, x1=xmean, y0=usr[3], y1=xmean, col=2, lwd=2)
-#       #   segments(x0=xmean, x1=usr[1], y0=xmean, y1=xmean, col=2, lwd=2)
-#       # }
-#     }
-#     dev.off()
-#   }
-# }
+  for(ftype in c('jpeg', 'pdf')) {
+    fn = paste0('./figures/parameter_recovery_', task, '_dct.pdf')
+    if(ftype == 'pdf') pdf(file=fn, width=8, height=nrows*2)
+    if(ftype == 'jpeg') jpeg(gsub('.pdf','.jpeg',fn), width=8, height=nrows*2, units='in', quality=100, res=500)
+
+    par(mfrow=c(nrows,5), mar=c(3,3,2,.5), bty='l', mgp=c(2,.5,0), tck=-0.05)
+    for(pname in colnames(truePars)) {
+      pname_label = pname_mapping[[pname]]
+      x<-truePars[,pname]
+      y<-fitParsQps[2,pname,]
+      xlim <- ylim <- range(c(x,fitParsQps[,pname,]))
+
+      CI_contains_x <- fitParsQps[3,pname,] > x & fitParsQps[1,pname,] < x
+
+      xmean <- mean(x)
+
+      xlab <- ifelse(which(pname == colnames(truePars))>(nrows-1)*5, 'Data generating', '')
+      ylab <- ifelse(which(pname == colnames(truePars)) %% 5 == 1, 'Posterior (95% CI)', '')
+      plot(x,y, main=TeX(pname_label), xlab=xlab, ylab=ylab, xlim=xlim, ylim=ylim)
+      arrows(x0=x, y0=fitParsQps[1,pname,], y1=fitParsQps[3,pname,], code=3, angle=90, length=.025, col=adjustcolor(1, alpha.f=.5))
+      legend('topleft', paste0('r=',round(cor(x,y),2)), bty='n', cex=.8)
+      legend('bottomright', paste0(round(mean(CI_contains_x)*100,1), '%'), bty='n', cex=.8)
+      abline(a=0,b=1)
+
+      # group-level recovery plot
+      # if(pname %in% colnames(fitMuQps)) {
+      #   usr <- par('usr')
+      #   arrows(x0=usr[1],
+      #          y0=fitMuQps[1,pname],
+      #          y1=fitMuQps[3,pname],
+      #          code=3,
+      #          angle=90,
+      #          length=0.025, col=2, lwd=2,
+      #          xpd=TRUE
+      #   )
+      #   segments(x0=xmean, x1=xmean, y0=usr[3], y1=xmean, col=2, lwd=2)
+      #   segments(x0=xmean, x1=usr[1], y0=xmean, y1=xmean, col=2, lwd=2)
+      # }
+    }
+    dev.off()
+  }
+}

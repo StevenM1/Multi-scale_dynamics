@@ -799,36 +799,36 @@ dev.off()
 
 
 
-## Winning
-tasks <- c('wagenmakers2004_CS', 'forstmann2008', 'mileticvanmaanen2019exp2block2', 'wagenmakers2008exp2')
-trial_durations <- c(1.265, 2.850, 1.627, 0.837)
-pdf(file='./figures/spectra_winning_models_durations.pdf', width=8, height=2.5)
-par(mfcol=c(1, length(tasks)), mar=c(4,3,2,1), oma=c(0,1,0,0), bty='l', mgp=c(2,1,0), las=1)
-for(taskn in 1:length(tasks)) {
-  task <- tasks[taskn]
-  dat <- EMC2:::loadRData(paste0('./datasets/', task, '.RData'))
-  fns <- get_fns(task, 'zSMuAHbV', 'NULL', samples_dir='./samples/')
-  pp_fn <- fns[[1]]; samplers_fn <- fns[[2]]
-  if(!file.exists(pp_fn)) {
-    plot.new()
-    next
-  }
-  pp <- EMC2:::loadRData(pp_fn)
-  samplers <- EMC2:::loadRData(samplers_fn)
-
-  main_ <- paste0('Dataset ', taskn)
-  if(is.null(trial_durations[taskn])) {
-    xlab_ <- 'Log frequency'
-  } else {
-    xlab_ <- 'Period'
-  }
-  ylab_ <- ''
-  plotSpectrum(dat, pp=pp, pp2=NULL, xlab='', ylab=ylab_, main=main_, plot.log=TRUE,
-               detrend=FALSE, trial_duration = trial_durations[taskn])
-  if(taskn == 1) mtext('Log power', side=2, line=3, cex=.66,las=0)
-  mtext(xlab_, side=1, line=3, cex=.66, las=0)
-}
-dev.off()
+# ## Winning
+# tasks <- c('wagenmakers2004_CS', 'forstmann2008', 'mileticvanmaanen2019exp2block2', 'wagenmakers2008exp2')
+# trial_durations <- c(1.265, 2.850, 1.627, 0.837)
+# pdf(file='./figures/spectra_winning_models_durations.pdf', width=8, height=2.5)
+# par(mfcol=c(1, length(tasks)), mar=c(4,3,2,1), oma=c(0,1,0,0), bty='l', mgp=c(2,1,0), las=1)
+# for(taskn in 1:length(tasks)) {
+#   task <- tasks[taskn]
+#   dat <- EMC2:::loadRData(paste0('./datasets/', task, '.RData'))
+#   fns <- get_fns(task, 'zSMuAHbV', 'NULL', samples_dir='./samples/')
+#   pp_fn <- fns[[1]]; samplers_fn <- fns[[2]]
+#   if(!file.exists(pp_fn)) {
+#     plot.new()
+#     next
+#   }
+#   pp <- EMC2:::loadRData(pp_fn)
+#   samplers <- EMC2:::loadRData(samplers_fn)
+#
+#   main_ <- paste0('Dataset ', taskn)
+#   if(is.null(trial_durations[taskn])) {
+#     xlab_ <- 'Log frequency'
+#   } else {
+#     xlab_ <- 'Period'
+#   }
+#   ylab_ <- ''
+#   plotSpectrum(dat, pp=pp, pp2=NULL, xlab='', ylab=ylab_, main=main_, plot.log=TRUE,
+#                detrend=FALSE, trial_duration = trial_durations[taskn])
+#   if(taskn == 1) mtext('Log power', side=2, line=3, cex=.66,las=0)
+#   mtext(xlab_, side=1, line=3, cex=.66, las=0)
+# }
+# dev.off()
 
 
 
