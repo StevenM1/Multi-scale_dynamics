@@ -1,3 +1,4 @@
+## MINOR BUGFIX
 compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
          BayesFactor = TRUE, cores_for_props =4, cores_per_prop = 1,
          print_summary=TRUE,digits=0,digits_p=3, ...) {

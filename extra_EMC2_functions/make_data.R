@@ -291,8 +291,9 @@ make_data <- function (parameters, design = NULL, n_trials = NULL, data = NULL,
         ##add response
         data$R <- NA
         daList <- setNames(
-          lapply(levels(data$subjects),update_pars,npars=pars,da=data,return_all=FALSE,
-                 rfun=model()$rfun,return_learning=FALSE,mapped_p=mapped_p),
+          lapply(levels(data$subjects),update_pars,npars=pars,da=data,#return_all=FALSE,
+                 rfun=model()$rfun,#return_learning=FALSE,
+                 mapped_p=mapped_p),
           levels(data$subjects))
 
         # Extract parameters, combine with data

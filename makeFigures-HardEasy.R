@@ -340,6 +340,7 @@ m[1,c(column1Upper, column2Upper)] <- 1
 m[100,c(column1Upper, column2Upper)] <- 1
 m[1,c(column3Upper, column4Upper)] <- 2
 m[100,c(column3Upper, column4Upper)] <- 2
+palette(c('black', palette()[2:length(palette())]))
 
 for(ftype in c('jpeg','pdf')) {
   fn = './figures/FM_MS3RDM_objective_and_subjective.pdf'
